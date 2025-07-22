@@ -1,0 +1,576 @@
+
+1. Entrypoint in Docker
+ENTRYPOINT specifies the command that will always run when the container starts.
+
+It defines the executable process of the container.
+
+Example:
+
+dockerfile
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
+If CMD is also provided, it acts as arguments to ENTRYPOINT.
+
+2. CMD vs ENTRYPOINT
+CMD	ENTRYPOINT
+Provides default arguments for ENTRYPOINT	Defines the main executable
+Can be overridden at runtime (docker run)	Harder to override (requires --entrypoint)
+Only the last CMD in Dockerfile is effective	Only the last ENTRYPOINT is effective
+Example:
+
+dockerfile
+ENTRYPOINT ["echo"]
+CMD ["Hello, Docker!"]
+Running docker run <image> → Output: Hello, Docker!
+Running docker run <image> Hi! → Output: Hi! (overrides CMD)
+
+3. ADD vs COPY
+ADD	COPY
+Can fetch files from URLs	Only copies local files
+Extracts tar files automatically	Does not extract archives
+Less predictable due to extra features	Preferred for simple file copying
+Best Practice: Use COPY unless you need ADD's extra features.
+
+4. Pressing CTRL+C During docker build
+The build process is terminated.
+
+Partially built layers may remain cached.
+
+Next build will resume from the last successfully completed layer.
+
+5. Reducing Docker Image Size (2GB → Smaller)
+Use a smaller base image (alpine, slim versions).
+
+Multi-stage builds to discard intermediate layers.
+
+Remove unnecessary dependencies (apt-get clean, rm -rf /var/lib/apt/lists/*).
+
+Combine RUN commands to reduce layers.
+
+Use .dockerignore to exclude unwanted files.
+
+6. Layers vs Image
+Layers	Image
+Read-only filesystem changes	Final compiled artifact
+Each instruction in Dockerfile creates a layer	Combination of all layers
+Cached for faster builds	Immutable snapshot
+7. Multiple ENTRYPOINTs in Dockerfile
+Only the last ENTRYPOINT is effective.
+
+Previous ones are ignored.
+
+8. Default User in Containers
+Containers run as root by default (security risk).
+
+Best Practice: Use USER in Dockerfile:
+
+dockerfile
+USER nobody
+9. Docker Socket (/var/run/docker.sock)
+UNIX socket for Docker daemon communication.
+
+Allows containers to control the host’s Docker engine (security risk if exposed).
+
+10. Container Runtime in Docker
+Docker uses containerd as its default runtime.
+
+Other runtimes: runc, gVisor, Kata Containers.
+
+11. Mounting Filesystem in Docker
+Use -v (bind mount) or --mount:
+
+sh
+docker run -v /host/path:/container/path nginx
+For volumes:
+
+sh
+docker run -v myvolume:/container/path nginx
+12. Dockerfile Example & Push to Docker Hub
+dockerfile
+FROM alpine
+RUN apk add --no-cache nginx
+COPY index.html /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+Push:
+
+sh
+docker build -t username/repo:tag .
+docker login
+docker push username/repo:tag
+13. Dockerfile Structure
+Base Image (FROM)
+
+Metadata (LABEL, ENV)
+
+Dependencies (RUN, COPY, ADD)
+
+Configs (WORKDIR, USER)
+
+Runtime (EXPOSE, ENTRYPOINT, CMD)
+
+14. Multi-Stage Dockerfile
+dockerfile
+FROM golang:1.18 AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o app .
+
+FROM alpine
+COPY --from=builder /app/app /usr/bin/app
+CMD ["app"]
+15. Dockerfile to Install Java
+dockerfile
+FROM openjdk:11-jre-slim
+COPY app.jar /app.jar
+CMD ["java", "-jar", "/app.jar"]
+16. FROM Command
+Specifies the base image:
+
+dockerfile
+FROM ubuntu:20.04
+17. Publish (-p) vs Expose
+EXPOSE	-p / --publish
+Documents port (metadata)	Maps host:container ports
+No network binding	Binds to host interface
+Used in Dockerfile	Used in docker run
+18. Command to Publish & Expose
+sh
+docker run -p 8080:80 nginx
+In Dockerfile:
+
+dockerfile
+EXPOSE 80
+19. Docker Container
+A running instance of a Docker image.
+
+Isolated process with its own filesystem, networking, and resources.
+
+20. Difference Between CMD & ENTRYPOINT
+CMD: Default arguments, overridable.
+
+ENTRYPOINT: Main executable, harder to override.
+
+21. Difference Between CMD and RUN
+RUN	CMD
+Executes during build	Specifies runtime command
+Creates a new layer	Not executed during build
+22. Collecting Logs from Terminated Container
+sh
+docker logs <container_id>  # Works if container still exists
+docker inspect <container_id> | grep LogPath  # Manual log file access
+Best Practice: Use docker logs with log drivers (e.g., json-file, syslog).
+
+23. Docker Image Security Measures
+Use minimal base images (alpine).
+
+Scan for vulnerabilities (trivy, clair).
+
+Run as non-root (USER).
+
+Sign images (Docker Content Trust).
+
+24. Image Scanning Tools
+Trivy
+
+Clair
+
+Snyk
+
+Docker Scout (formerly Docker Security Scanning)
+
+25. Docker Swarm
+Docker’s built-in orchestration tool (simpler than Kubernetes).
+
+Declare services with docker stack deploy.
+
+26. Dockerfile
+Text file with instructions to build an image.
+
+27. Entrypoint & CMD
+ENTRYPOINT: Main process.
+
+CMD: Default arguments.
+
+28. Creating Docker Image
+sh
+docker build -t myimage:tag .
+
+29. Image vs Container
+Image	Container
+Template (read-only)	Running instance
+Stored in registry	Ephemeral
+30. Namespaces & cgroups
+Namespaces: Isolate processes (PID, network, etc.).
+
+cgroups: Limit resources (CPU, memory).
+
+31. Delivering Custom Containers
+Push to Docker Hub / Private Registry:
+
+sh
+docker push username/repo:tag
+Export as tar:
+
+sh
+docker save -o image.tar myimage:tag
+32. Storing Docker Images
+Docker Hub (public/private).
+
+Private registries (AWS ECR, Azure ACR, Harbor).
+
+33. DTR (Docker Trusted Registry)
+Enterprise-grade image storage with security scanning, signing, and RBAC.
+
+34. Dockerfile with All Commands
+dockerfile
+FROM alpine:3.14
+LABEL maintainer="me@example.com"
+RUN apk add --no-cache nginx
+COPY index.html /usr/share/nginx/html
+WORKDIR /var/www
+EXPOSE 80
+USER nginx
+ENTRYPOINT ["nginx"]
+CMD ["-g", "daemon off;"]
+35. Dockerfile Versioning
+Tag images with versions (myapp:v1.0).
+
+Use ARG for build-time variables.
+
+36. Troubleshooting Containers
+sh
+docker logs <container_id>
+docker exec -it <container_id> sh
+docker inspect <container_id>
+37. Docker Compose
+Define multi-container apps in docker-compose.yml:
+
+yaml
+services:
+  web:
+    image: nginx
+    ports:
+      - "80:80"
+38. Docker vs Kubernetes
+Docker	Kubernetes
+Container runtime	Orchestration
+Single host	Multi-host clusters
+docker-compose	kubectl
+39. Best Practices for Dockerfile
+Use .dockerignore.
+
+Minimize layers.
+
+Avoid latest tags.
+
+Scan for vulnerabilities.
+
+40. Scanning Docker Images
+sh
+trivy image myimage:tag
+41. Docker Layers (Read/Write)
+Top layer is writable (container changes).
+
+Lower layers are read-only (image).
+
+42. Common Docker Issues
+Large image sizes.
+
+Permission issues (USER).
+
+Cache invalidation (COPY too early).
+
+43. Troubleshooting Crashed Container
+sh
+docker logs <container_id>
+docker inspect <container_id>
+docker run -it --entrypoint sh myimage  # Debug shell
+44. Java Container Restart Issue
+Check ENTRYPOINT/CMD in Dockerfile.
+
+Ensure PID 1 handles signals (use tini):
+
+dockerfile
+ENTRYPOINT ["/sbin/tini", "--", "java", "-jar", "app.jar"]
+45. Plain Docker Machine Issues
+Debug with:
+
+sh
+docker info
+docker system prune
+Summary
+This covers all 60 questions with detailed explanations. Let me know if you need further clarification! 🚀
+
+answer the below questions from interview point of view
+Here’s a concise, interview-focused breakdown of key Docker questions with direct, impactful answers
+
+59 * container having a java based application when i am restarting everything working fine but when i was working to pass same command in cmd its not restarting what could be the issues
+  60 * am using plane vanila docker machine not using any networking concept still container is not up.
+  61 * one of my client having a requirement they donot want to host their image on a docker registry. they want to containerization custom registry.(client want secured image)
+  62 * To copy files/docker image  from one machine to another machine. one machine is build vm another is plain vm bcoz my container is running out of memeory. is it possible? whats the command
+  63 * VM vs Docker
+  64 * Why cant we use AWS AMI instead of Docker Image
+  65 * Dockerfile directives and some sceneries based on entry point
+  66 * Docker file size is 2GB and need to reduce the size ? what will you do ?
+  67 * Diff bw layers and image ?
+  68 * If you give multiple entrypoints in Docker file, which will be executed and what happened to previous ones ?
+  69 * By default in which user the container starts to execute cmds ?
+  70 * dockerfile structure
+  71 * docker networks
+  72 * command to attach docker volume to container
+  73 * create basic container cmd
+  74 * whats the use of docker ps
+  75 * difference between k8s & dockerswam
+  76 * what are the services in docker swam
+  77 * with dockers what kind of application you used java based/ python based
+  78 * What's docker file
+  79 * CMD vs entrypoint
+  80 * What docker port mapping
+  81 * What's -p
+  82 * Dockerfile
+  83 * Docker many questions on network, docker commands , docker troubleshooting,  multistage build
+  84 * State full and stateless containers
+  85 * Difference between them
+  86 * Tell usecase
+  87 * In dockerfile run the application which command u use - entrypoint, CMd
+  88 * What is containerization
+  89 * How you give root permission inside docker file
+  90 * Dockerfile -  explain each command what you have written
+  91 * Docker commands
+  92 * How will you make your application in docker access externally
+  93 * Write multistage docker file
+  94 * Diff between CMD and entry point
+  95 * How to find background process in docker containers
+  96 * what is docker swarm & Compose
+  97 * Which applications are running in your docker containers
+  98 * what is entry poind and command in in docker
+  99 * write docker file
+Here’s a crisp, interview-ready answer format for your Docker questions:
+
+59. Java Container Restart Issue
+Issue:
+
+When manually running the same CMD command, the app crashes.
+Why?
+
+Docker uses PID 1 for process management. Java apps might ignore signals (SIGTERM) without a proper init system.
+Fix:
+
+dockerfile
+# Use tini (Lightweight init system)
+ENTRYPOINT ["/sbin/tini", "--", "java", "-jar", "app.jar"]
+60. Vanilla Docker Machine – Container Not Starting
+Check:
+
+docker logs <container_id> → Check errors.
+
+docker run -it --entrypoint sh <image> → Debug interactively.
+
+Verify resources:
+
+sh
+docker stats  # Check memory/CPU usage
+61. Private Secure Registry (Not Docker Hub)
+Solution:
+
+Use Harbor (self-hosted registry) or AWS ECR with IAM policies.
+
+Enable Docker Content Trust (DCT) for image signing:
+
+sh
+export DOCKER_CONTENT_TRUST=1
+docker push myregistry/myimage:tag
+62. Copy Docker Image Between VMs
+Command:
+
+Export image:
+
+sh
+docker save -o myimage.tar myimage:tag
+Transfer file (scp/USB).
+
+Import on target VM:
+
+sh
+docker load -i myimage.tar
+63. VM vs Docker
+VM	Docker
+Full OS + Hypervisor	Shares host OS kernel
+Slow boot	Starts in seconds
+Heavy (~GBs)	Lightweight (~MBs)
+64. Why Not AWS AMI Instead of Docker?
+AMI: Static, slow to deploy, OS-bound.
+
+Docker: Portable, faster, microservices-friendly.
+
+65. Dockerfile Directives & EntryPoint Scenarios
+Key Directives: FROM, RUN, COPY, EXPOSE, ENTRYPOINT, CMD.
+EntryPoint Use Case:
+
+dockerfile
+# Wrap Python app with a script
+ENTRYPOINT ["python", "app.py"]  # Always runs
+CMD ["--debug"]                  # Optional args
+66. Reduce Docker Image Size (2GB → Smaller)
+Use alpine base:
+
+dockerfile
+FROM alpine:3.14
+Multi-stage build:
+
+dockerfile
+FROM maven AS build
+COPY . .
+RUN mvn package
+
+FROM tomcat:jre11-alpine
+COPY --from=build /target/app.war /webapps/
+Cleanup in same RUN layer:
+
+dockerfile
+RUN apt-get update && apt-get install -y package && rm -rf /var/lib/apt/lists/*
+67. Layers vs Image
+Layers: Read-only steps (each RUN, COPY creates a layer).
+
+Image: Final merged layers + metadata.
+
+68. Multiple EntryPoints
+Only the last ENTRYPOINT in the Dockerfile is executed.
+
+69. Default Container User
+Runs as root (security risk!).
+Best Practice:
+
+dockerfile
+USER 1001  # Non-root user
+70. Dockerfile Structure
+dockerfile
+FROM base:tag           # Base image
+COPY . /app             # Copy files
+RUN make /app           # Install deps
+WORKDIR /app            # Set working dir
+EXPOSE 80               # Document port
+USER 1001               # Non-root
+ENTRYPOINT ["/app/bin"] # Main executable
+CMD ["--help"]          # Default args
+71. Docker Networks
+bridge: Default (isolated containers).
+
+host: Shares host’s network stack.
+
+overlay: Multi-host (Swarm/Kubernetes).
+
+72. Attach Volume to Container
+sh
+docker run -v /host/path:/container/path nginx
+# Or named volume:
+docker run -v myvolume:/container/path nginx
+73. Create Basic Container
+sh
+docker run -d --name mycontainer nginx:alpine
+74. docker ps Purpose
+Lists running containers.
+
+docker ps -a → Shows all (including stopped).
+
+75. Kubernetes vs Docker Swarm
+Swarm	K8s
+Built-in, simple	Complex, powerful
+No auto-scaling	Auto-scaling
+76. Docker Swarm Services
+Services: Scalable containers (e.g., nginx with 5 replicas).
+
+Stack: Deploy docker-compose.yml to Swarm.
+
+77. Apps Used in Docker
+Java (Spring Boot), Python (Flask), Node.js (Microservices).
+
+78. Dockerfile Definition
+Blueprint to build Docker images (text file with commands).
+
+79. CMD vs EntryPoint
+CMD: Default args (override at runtime).
+
+ENTRYPOINT: Main executable (hard to override).
+
+80. Docker Port Mapping
+Maps host port → container port:
+
+sh
+docker run -p 8080:80 nginx  # Host:8080 → Container:80
+81. -p Flag
+Short for --publish (port mapping).
+
+82. Dockerfile Example
+dockerfile
+FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["flask", "run", "--host=0.0.0.0"]
+83. Multi-Stage Build
+dockerfile
+FROM maven AS build
+COPY . .
+RUN mvn package
+
+FROM tomcat:alpine
+COPY --from=build /target/app.war /webapps/
+84. Stateful vs Stateless Containers
+Stateless	Stateful
+No persistent data	Uses volumes (e.g., databases)
+REST APIs	MySQL, Redis
+85. Use Case for Stateful
+MySQL: Needs persistent storage (docker volume create mysql-data).
+
+86. EntryPoint vs CMD for Apps
+Use ENTRYPOINT for main app (e.g., java -jar app.jar).
+
+Use CMD for default args (e.g., --debug).
+
+87. Containerization
+Packaging apps + dependencies into isolated, portable containers.
+
+88. Root Permission in Dockerfile
+dockerfile
+USER root  # Not recommended!
+RUN chmod +x /app/script.sh
+USER 1001  # Switch back to non-root
+89. Docker Commands Cheat Sheet
+sh
+docker build -t myimage .          # Build image
+docker run -d -p 80:80 myimage     # Run container
+docker exec -it mycontainer sh     # Enter shell
+docker logs mycontainer            # View logs
+docker volume create myvolume      # Create volume
+90. Expose App Externally
+sh
+docker run -d -p 80:5000 myflaskapp  # Host:80 → Container:5000
+91. Find Background Processes
+sh
+docker exec mycontainer ps aux
+92. Docker Swarm & Compose
+Swarm: Orchestration (native clustering).
+
+Compose: Local multi-container apps (docker-compose.yml).
+
+93. Apps in Containers
+Java (Spring Boot), Python (ML models), Node.js (APIs).
+
+94. EntryPoint vs CMD
+ENTRYPOINT: Fixed executable.
+
+CMD: Default args (overridden by docker run).
+
+95. Dockerfile Example
+dockerfile
+FROM node:14
+WORKDIR /app
+COPY package*.json .
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+ 
