@@ -1,0 +1,2393 @@
+1  * K8s write deployment spec
+  2  * Troubleshooting in k8s
+  3  * K8S architecture ?
+  4  * Diff bw container and the process
+
+
+A process is a running instance of a program.
+It includes the program’s code, current activity (like registers and program counter), and resources such as memory, file descriptors, and environment variables.
+
+Example: When you run python myscript.py, a new process is created for the Python interpreter.
+
+
+A container is a lightweight, standalone, and executable environment that includes everything needed to run a piece of software — code, runtime, libraries, and system tools — while being isolated from the host system using kernel features like namespaces and cgroup
+
+| Feature              | **Process**                                 | **Container**                                                     |
+| -------------------- | ------------------------------------------- | ----------------------------------------------------------------- |
+| **Definition**       | A running instance of a program             | A lightweight, isolated environment to run processes              |
+| **Isolation**        | Shares full OS resources with all processes | Uses namespaces & cgroups to isolate from host & other containers |
+| **Resource Control** | Limited — managed by the OS                 | Controlled via container runtime (e.g., CPU, memory limits)       |
+| **Filesystem**       | Uses host filesystem                        | Has its own layered, virtual filesystem                           |
+| **Start Command**    | Started via executable or shell             | Started via image (e.g., `docker run`)                            |
+| **Lifecycle**        | Managed by kernel/process manager           | Managed by container engine (e.g., Docker, containerd)            |
+| **Example**          | `nginx` running directly on host            | `nginx` running inside a container                                |
+| **Portability**      | Not portable (depends on host environment)  | Highly portable (can run the same anywhere Docker is present)     |
+
+
+
+
+ 
+  5  * Suppose I have 1 master and 2 replicas, master crashes and what will happen to replication ?
+
+Master Crashed → No longer writes accepted, replication stops
+Replica Continue to serve read-only queries,
+Replication Flow Stops since replicas cannot pull changes from master
+
+ Recovery Options
+1. Manual Failover
+You promote one replica to act as the new master:
+
+# Tool-specific, e.g., MySQL
+CHANGE MASTER TO MASTER_HOST='new-master' ...
+2. Automatic Failover
+Use tools like:
+
+MySQL: MHA, Orchestrator, Group Replication
+
+PostgreSQL: Patroni, repmgr
+
+Redis: Redis Sentinel
+
+These can detect failure and promote a replica automatically.
+
+✅ Summary:
+Replication stops because replicas can’t get updates from the crashed master.
+
+Reads can still happen from replicas.
+
+Writes are lost unless a failover is performed.
+
+You must promote a replica to be the new master to resume write availability
+
+
+
+  6  * In case there is only one master and fails, application runs or failure ?
+
+
+If there is only one master and it fails, the application behavior depends on how it interacts with the database:
+
+🔹 Case: Only One Master (No Replica or Failover Mechanism)
+🔸 What Happens:
+Writes fail: Application cannot write new data (e.g., insert/update).
+
+Reads may fail: If reads go to the master (typical in monolithic DB setups), these will also fail.
+
+Connection errors: Application gets DB connection errors or timeouts.
+
+Application failure: Most apps dependent on DB will partially or completely fail.
+
+✅ Summary:
+Component	Behavior
+Database	Not available
+Application	Likely fails or becomes read-only (rare)
+Replication	Not applicable (single node)
+Recovery	Manual intervention needed to restore DB or switch to standby
+
+
+  7  * How do you rate in k8s ?
+
+
+  8  * Name control plane of k8s ?
+
+In Kubernetes, the Control Plane is the brain of the cluster — it manages the overall cluster state and orchestrates all operations.
+
+✅ Main Components of the Kubernetes Control Plane:
+Component	         Description
+kube-apiserver   	Frontend of the      control plane. All communication (kubectl, nodes, etc.) goes through this API server.
+
+etcd	                Key-value store that holds all cluster data (desired state, configs, secrets).
+
+kube-scheduler	         Decides which node a pod should run on based on resource requirements and policies.
+
+kube-controller-manager	 Runs various controllers that manage the cluster state (e.g., Deployment controller, Node controller).
+
+cloud-controller-manager (optional)	Manages cloud-specific control logic (e.g., load balancers, storage, networking).
+
+Control Plane Summary:
+It does not run application pods
+
+Manages desired vs actual state
+
+Handles scheduling, scaling, health checks, and more
+
+
+
+
+
+  9  * Networking solutions on k8s ?
+
+In Kubernetes, networking is a core component that enables communication between pods, services, and external clients. There are multiple networking solutions (also called CNI plugins) designed to meet Kubernetes networking requirements.
+
+✅ Key Kubernetes Networking Requirements
+Every pod gets its own IP address.
+
+All pods can communicate with each other without NAT.
+
+Nodes can communicate with all pods (and vice versa).
+
+Services are accessible via cluster IP or external IP.
+
+
+
+
+  10 * Which network solutions are do you use in deployments ?
+
+CNI (Container Network Interface) is a standard interface designed by the Cloud Native Computing Foundation (CNCF) to configure network interfaces in Linux containers.
+
+Kubernetes uses CNI plugins to assign IP addresses to pods and manage their network connectivity.
+
+🔹 Why Kubernetes Uses CNI
+Kubernetes delegates pod networking to CNI plugins so it can:
+
+Remain modular and pluggable
+
+Support various networking models
+
+Allow custom networking backends (e.g., Flannel, Calico, Cilium)
+
+🔸 What Does a CNI Plugin Do?
+A CNI plugin is a small program that:
+
+Creates a network interface inside the container (pod).
+
+Connects it to the host network (typically via a bridge, veth pair, or tunnel).
+
+Assigns an IP address to the container.
+
+Optionally configures routing, firewall rules, and DNS.
+
+Tears it down cleanly when the pod dies.
+
+🧱 CNI Plugin Types
+1. Main Plugins
+Handle core networking tasks (IP allocation, connectivity):
+
+Flannel
+
+Calico
+
+Cilium
+
+Weave
+
+Kube-Router
+
+2. IPAM Plugins (IP Address Management)
+Allocate and release IP addresses:
+
+host-local
+
+dhcp
+
+static
+
+whereabouts (used for IP allocation in multiple subnets)
+
+3. Chained Plugins
+Used together (in chains) to extend functionality:
+
+Example: bandwidth plugin to limit pod bandwidth.
+
+🔧 Where Are CNI Plugins Installed?
+Usually installed at: /opt/cni/bin
+
+Configuration files are in: /etc/cni/net.d
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  11 * In my cluster schedulers goes down completely ? what will happen to applications ?
+
+The kube-scheduler is a control plane component responsible for:
+
+Assigning pods to nodes based on resource availability and scheduling policies.
+
+❗ If the scheduler goes down...
+1. Running Applications Continue to run normally — they are unaffected.
+2. Existing Pods Remain operational on their assigned nodes.
+3.New Pods Will stay in Pending state — no scheduler to place them on a node.
+4.Scaling / Auto-scaling Won’t work — newly created pods can’t be scheduled.
+5.Pod Failover Fails if a pod dies — no one is there to reschedule it.
+
+🔧 Cluster Behavior
+Control plane is partially degraded.
+
+Nodes and kubelets continue to manage running pods.
+
+kube-apiserver, kubelet, and etcd still work fine.
+
+
+
+
+
+11 $ What You Should Do when a schedular goes down
+Check logs: kubectl -n kube-system logs kube-scheduler-<pod>
+
+Restart the scheduler pod (if using static pods or self-managed control plane).
+
+In managed Kubernetes (like EKS, AKS, GKE), the control plane is usually auto-recovered.
+
+
+
+  12 * Can I create my scheduler ?
+
+Steps to Build a Custom Scheduler
+Create a controller or service in Go (or any language):
+
+Watch for unscheduled pods.
+
+Query available nodes.
+
+Apply your custom logic.
+
+Bind pods to nodes using the Kubernetes API.
+
+Use the Kubernetes API to bind pods:
+
+http
+POST /api/v1/namespaces/default/pods/my-pod/binding
+Run your scheduler as a Deployment or standalone process.
+
+
+
+
+
+
+
+
+
+
+
+  13 * Can I create my own controller manager ?
+  14 * What is static pod ?
+
+
+A static pod is a pod managed directly by the kubelet, not by the Kubernetes API server.
+
+It’s defined in a YAML file placed on the node (default path: /etc/kubernetes/manifests/).
+
+Used for critical system components like kube-apiserver, etcd, etc., especially in control plane nodes.
+
+
+
+2. Deployment has 2 pods, but traffic is only hitting one — Why?
+
+Possible reasons:
+
+Service is not load-balancing: Check Endpoints using kubectl get endpoints
+
+Pod is not Ready: Use kubectl get pods and check READY column
+
+Node Affinity or taints: Pod may be isolated
+
+Networking issue: CNI plugin may not be working properly
+
+Troubleshooting:
+
+Check pod readiness: kubectl describe pod <pod-name>
+
+Check service endpoints: kubectl get endpoints <svc>
+
+Run a curl from within a pod: kubectl exec -it <pod> -- curl <svc-name>:<port>
+
+
+
+3. Kubernetes Architecture
+
+Control Plane:
+
+kube-apiserver: Frontend API
+
+etcd: Key-value store
+
+kube-scheduler: Places pods on nodes
+
+kube-controller-manager: Ensures desired state
+
+Node Components:
+
+kubelet: Pod manager
+
+kube-proxy: Network routing
+
+Container runtime: e.g., containerd, Docker
+
+
+
+4. Network Policies in Kubernetes
+
+Used to control ingress/egress traffic to pods.
+
+Applied using labels, not IPs.
+
+Example: Only allow traffic to app=frontend from app=backend.
+
+Requires a CNI plugin that supports policies (e.g., Calico, Cilium).
+
+
+
+5. Accept traffic only from certain IP or allow only specific IPs
+
+Use Network Policies to limit allowed IP blocks:
+
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: 192.168.0.0/24
+
+For external access, configure Ingress or LoadBalancer services with firewall rules or cloud security groups.
+
+
+
+6. ClusterIP Service – What and Why?
+
+ClusterIP is the default Kubernetes Service type.
+
+It exposes the service on an internal virtual IP, accessible only inside the cluster.
+
+Used for internal microservice-to-microservice communication.
+
+
+
+7. Can You Create a Service Without a Cluster IP?
+
+Yes, by setting clusterIP: None. This creates a headless service.
+
+Headless services are used for:
+
+StatefulSets (direct pod access)
+
+DNS-based service discovery
+
+
+
+8. Why Does Kubernetes Use Cluster IPs?
+
+Abstraction layer for internal communication.
+
+Ensures consistent service endpoint (IP) even if the underlying pods change.
+
+Supports built-in load balancing among pod endpoints.
+
+
+
+9. Pod Not Coming Up – Troubleshooting Steps
+
+Check pod status:
+
+kubectl get pods
+
+Describe pod to check events:
+
+kubectl describe pod <pod>
+
+Check logs:
+
+kubectl logs <pod>
+
+Check node status:
+
+kubectl get nodes
+
+Check scheduling issues (e.g., taints, resources):
+
+
+10.Deployment stratergies ? Explain how you were setting up logic in real time?
+
+In Kubernetes, Deployment Strategies define how the Deployment controller transitions from the current ReplicaSet (version N) to a new ReplicaSet (version N+1).
+They control how Pods are created, terminated, and scaled during an update, to balance: Availability, Risk, Rollback ability and
+Resource constraints
+
+1.Canary strategy (via separate Deployments)
+
+2.Blue-Green (via separate Deployments + Ingress swap)
+
+3.Argo Rollouts
+
+4.Rolling Update
+
+🎯 Why it matters
+In production, you often can’t take the entire workload offline.
+
+Different workloads have different risk profiles — e.g., stateless web vs. stateful DB.
+
+Rolling Update is zero downtime by design, but you control the trade-off between update speed and risk with maxUnavailable and maxSurge.
+
+⚙️ How Rolling Update works internally
+The Deployment controller creates a new ReplicaSet for the new version (e.g., new image).
+
+It gradually increases replicas in the new RS while decreasing replicas in the old RS, respecting maxUnavailable and maxSurge.
+
+Kube-scheduler places new Pods according to constraints.
+
+Readiness probes control rollout pacing — Pods only count as “available” once ready.
+
+If a probe fails, the rollout pauses at that step — you see this with kubectl rollout status.
+
+RollingUpdate fields
+yaml
+
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+
+maxUnavailable: Max number of Pods that can be unavailable during the update.
+
+E.g., with 4 replicas and maxUnavailable: 1, Kubernetes guarantees at least 3 are always healthy.
+
+maxSurge: Max extra Pods that can be added above the desired replicas.
+
+Controls how much capacity you temporarily over-provision to speed up rollout.
+
+These can be integers or percentages (50%).
+
+
+Example: You run a web service with 10 Pods.u want no more than 20% downtime
+You can tolerate up to 2 extra Pods during rollout.
+
+yaml
+Copy
+Edit
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 2
+    maxSurge: 2
+Kubernetes can spin up up to 12 Pods total.
+
+It never lets more than 2 Pods be unavailable at once.
+
+As each new Pod passes readiness checks, an old Pod is removed.
+
+This balances safety (low downtime) with speed (extra capacity).
+
+
+
+🗂️ Complete YAML — Rolling Update
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rolling-update-example
+spec:
+  replicas: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 2
+      maxSurge: 2
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp
+        image: myapp:1.0
+To update:
+
+Change image: myapp:1.0 → myapp:2.0.
+
+kubectl apply -f deployment.yaml.
+
+Watch kubectl rollout status deployment/rolling-update-example.
+
+🗂️ RollingUpdate vs Recreate
+RollingUpdate	Recreate
+Availability	Zero downtime	Downtime
+Behavior	New Pods created before old ones terminated	Terminates all old Pods first
+Use cases	Stateless web apps	Apps that can’t handle version overlap (e.g., breaking DB schema changes)
+
+✅ Key takeaway for pros
+RollingUpdate is the default for Deployments because it balances zero downtime and simple rollbacks.
+
+Tune maxUnavailable and maxSurge for your SLA and infra constraints.
+
+Use kubectl rollout pause/resume and kubectl rollout undo for safe troubleshooting.
+
+
+
+
+  18 * Network policies in K8S ?
+  19 * Suppose traffic has to go to the only particular IP ? or k8S cluster should accept the traffic from certain IP range ? How do you manage ?
+  20 * explain cluster IP service ?  WHY* ?
+  21 * can you create a service without a cluster IP ?
+  22 * Why k8S is given cluster IP ?
+  23 * Why k8s has given NodePort services ? can you access the traffic only to that nodeport from all the worker nodes or particular worker node?
+  24 * you are getting the traffic from outside and you have exposed a deployment or a pod to a node port and can you access it from all the worker node ?
+  25 * when a traffic hits a website, how the traffic will be getting into k8s cluster ?
+  26 * Deployment stratergies ? Explain how you were setting up logic in real time
+  27 * Write a deployment script with a service and end point for the application that is containerised as pod and 
+  28 * for that pod I need to create a service?
+
+
+  29 * By default, how much volume did the k8s give for the pod and what will be their size?
+
+By default, Kubernetes Pods do not get persistent storage automatically.
+There is no default PersistentVolume (PV) or PersistentVolumeClaim (PVC) attached unless you define it.
+
+Every Pod does get a scratch space — called an emptyDir volume — if you define it in the Pod spec.
+
+If you don’t define any volumes, the container’s filesystem is ephemeral:When the Pod stops or is rescheduled to another Node, that data is lost.
+
+emptyDir
+It’s the simplest built-in volume type.
+
+Created on the Node’s local disk when the Pod is assigned to the Node.
+
+Data is deleted when the Pod is deleted.
+
+Size limit? By default: no size limit, except the total capacity of the Node’s disk.
+
+volumes:
+  - name: scratch
+    emptyDir: {}
+
+
+What about PVCs?
+If you need persistent storage that survives Pod restarts:
+
+You create a PersistentVolumeClaim (PVC).
+
+The PVC requests storage from a PersistentVolume (PV) or a dynamic provisioner (StorageClass).
+
+The size depends on what you specify in the PVC spec.
+
+Example:
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: myclaim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi   # 👈 You decide this
+
+
+
+  30 * k8s deployment file
+
+
+  31 * k8s configmap & secrets
+  32 * why we have to use SSL certificate 
+  33 * k8s services & types
+  34 * ingress 
+  35 * ingress controller
+
+   Ingress is a Kubernetes API object that manages external access to your cluster’s Services, usually HTTP and HTTPS traffic.
+
+✅ In simple terms:
+
+Service: Exposes Pods inside the cluster.
+
+Ingress: Lets people outside the cluster reach your Services — through defined URLs, hostnames, and paths.
+
+📌 Example Ingress
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-ingress
+spec:
+  rules:
+  - host: myapp.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myapp-service
+            port:
+              number: 80
+✅ What does this do?
+
+When someone visits myapp.example.com, the request goes to the Ingress Controller.
+
+The Ingress Controller checks the rules in this Ingress.
+
+It forwards the request to myapp-service on port 80.
+
+
+  36 * how do I connect RDS to k8s pod
+
+
+
+  37 * are you provisioning infrastructure for k8s or you are maintaining the k8s cluster?
+
+
+
+  38 * there are 3 replicas sets of the service that is frontend service for an application customer complaining that they cannot see the home page of the application but you check on the k8s you come to know that respective pods are coming and dying very frequently within frequent seconds how you will resolve and troubleshoot it?
+
+
+
+  39 * are you managing the application deplouyment as in ci/cd devops pipeline or there is a different team managing the application deployments?
+
+
+
+  40 * customer is looking for microservice which is exposed to internet so what are the diff manifest files to support this behavior?
+
+
+  Q1. Which Ingress controller are you using?
+Common answer:
+➡️ “We mostly use the NGINX Ingress Controller because it’s stable, widely supported, and works well with cert-manager for TLS. On cloud, we might use the AWS ALB Ingress Controller if we need tight AWS integration.”
+
+📌 Q2. Which all tools do you use for deployment?
+Typical tools:
+
+kubectl — direct YAML apply
+
+Helm — for templated deployments
+
+ArgoCD or FluxCD — for GitOps continuous delivery
+
+Jenkins, GitLab CI/CD, or GitHub Actions — for pipelines
+
+Kustomize — to patch YAML for different environments
+
+📌 Q3. K8s Master Node, Worker Node
+Master Node:
+Runs control plane components:
+
+API Server (kube-apiserver)
+
+Scheduler (kube-scheduler)
+
+Controller Manager (kube-controller-manager)
+
+etcd (cluster state database)
+
+Worker Node:
+Runs:
+
+kubelet (talks to API server)
+
+kube-proxy (handles networking rules)
+
+Pods (your actual app containers run here)
+
+📌 Q4. YAML file
+YAML files are declarative configs that define Kubernetes objects:
+
+Pods
+
+Deployments
+
+Services
+
+Ingress
+
+ConfigMaps, Secrets, etc.
+
+Example Deployment:
+
+yaml
+Copy
+Edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp
+        image: nginx
+📌 Q5. Blue-Green Strategy
+Blue-Green Deployment:
+
+You have two environments: Blue (live) and Green (new version).
+
+Deploy new version to Green → test it → switch traffic to Green → Blue becomes idle backup → rollback is instant.
+✅ Used to reduce downtime and risk.
+
+📌 Q6. Difference between NodePort & ClusterIP
+NodePort	ClusterIP
+Exposes Service to	External & internal	Internal only
+How	Opens a port on each Node	Virtual IP inside cluster
+Example	Access app from outside with Node’s IP:Port	Access only from Pods inside cluster
+
+📌 Q7. K8s architecture
+Components:
+
+Control Plane: API Server, Scheduler, Controller Manager, etcd
+
+Nodes: kubelet, kube-proxy, Container Runtime
+
+Add-ons: Ingress Controller, DNS, Dashboard, Metrics Server
+
+📌 Q8. What is kube-proxy?
+kube-proxy:
+
+Runs on each Worker Node.
+
+Manages networking: cluster IPs, NAT, load balancing.
+
+Uses iptables or IPVS to route traffic to Pods.
+
+📌 Q9. What is Ingress and Egress?
+Ingress: Traffic coming into the cluster (e.g., clients accessing your app).
+
+Egress: Traffic going out of the cluster (e.g., Pods calling external APIs).
+
+📌 Q10. What does kubectl do?
+kubectl is the CLI tool to:
+
+Deploy resources (apply, create)
+
+View cluster state (get, describe)
+
+Debug (logs, exec)
+
+Manage config (config, context)
+
+📌 Q11. Explain Blue-Green Deployment
+Same as Q5 — it’s about having two environments to switch traffic with minimal downtime and safe rollback.
+
+📌 Q12. ReplicaSet vs StatefulSet + Example
+ReplicaSet	StatefulSet
+Purpose	Ensure N identical Pods	Ensure ordered, unique, stable Pods
+Pod Identity	All Pods identical	Each Pod gets a sticky identity (name)
+Example App	Stateless apps	DBs, Kafka, Elasticsearch
+
+Example StatefulSet App:
+A MongoDB or Cassandra cluster → each Pod needs stable storage & predictable DNS (pod-0, pod-1).
+
+📌 Q13. Difference between ConfigMaps & Secrets
+ConfigMap	Secret
+Stores	Non-sensitive config	Sensitive data (passwords, keys)
+Encoding	Plaintext	Base64 encoded
+Example	App settings	DB passwords
+
+📌 Q14. Pod with MySQL, NGINX, Redis — default placement
+By default, **all 3 containers run on the same Node, in the same Pod sandbox, sharing:
+
+Network namespace (localhost)
+
+Volumes
+
+📌 Q15. Placement strategy — multi-container Pod
+Single Pod: Always runs on one Node → all containers run together.
+
+You can’t split them across Nodes inside the same Pod.
+
+📌 Q16. Check logs for nginx container only
+bash
+Copy
+Edit
+kubectl logs abcd -c nginx
+📌 Q17. Exec into MySQL container
+bash
+Copy
+Edit
+kubectl exec -it abcd -c mysql -- bash
+(or sh if no bash)
+
+📌 Q18. K8s architecture
+(Same as Q7, see above) — Control Plane + Nodes + Add-ons.
+
+📌 Q19. Init & Sidecar
+Init Container: Runs once at Pod start, sets up tasks → exits.
+
+Sidecar: Runs alongside main container, adds functionality (e.g., log shipper).
+
+📌 Q20. DaemonSet
+A DaemonSet runs one Pod per Node.
+Use cases:
+
+Logging agents (Fluentd)
+
+Monitoring agents (Node Exporter)
+
+CNI plugins
+
+📌 Q21. Services in Cluster
+Types:
+
+ClusterIP: Internal only
+
+NodePort: Opens port on every Node
+
+LoadBalancer: Cloud LB with public IP
+
+Headless Service: No cluster IP → DNS only
+
+📌 Q22. Ingress
+Ingress = API object for HTTP(S) routing → needs an Ingress Controller + LoadBalancer Service to expose traffic.
+
+📌 Q23. Job taking 10s — kill if it exceeds
+Use ActiveDeadlineSeconds:
+
+yaml
+Copy
+Edit
+spec:
+  activeDeadlineSeconds: 10
+If job exceeds, kubelet force-kills it.
+
+📌 Q24. Drain traffic from Pod for maintenance
+bash
+Copy
+Edit
+kubectl drain <node-name> --ignore-daemonsets
+This:
+
+Evicts Pods
+
+Schedules them on other Nodes
+
+📌 Q25. Access multiple containers in a Pod from browser
+Usually only one container listens on Pod’s port (e.g., web server).
+If multiple containers expose ports:
+
+Use a Service to expose each container on different ports.
+
+Or configure a reverse proxy inside one container.
+
+42️⃣ Kubernetes: setting up a high availability (HA) cluster
+Answer:
+➡️ “To set up an HA Kubernetes cluster, we deploy multiple control plane nodes (masters) and use a load balancer in front of the API servers.
+The etcd database is also run in a clustered mode with an odd number of members (like 3 or 5) for quorum and failover.
+We also configure kubelets and kube-proxy on worker nodes to talk to multiple API servers, so if one goes down, the cluster stays functional.”
+
+✅ Key parts for HA:
+
+Multiple control plane nodes
+
+External Load Balancer for kube-apiserver
+
+etcd cluster
+
+Correct kubeadm flags, for example:
+
+bash
+Copy
+Edit
+kubeadm init --control-plane-endpoint "LB-DNS:6443"
+📌 43️⃣ Troubleshoot cluster
+Answer:
+➡️ “When troubleshooting a cluster issue, I usually start with kubectl get componentstatus to check control plane health — API server, scheduler, etcd.
+I also check kubelet and kube-proxy on nodes.
+Typical checks:
+
+kubectl get nodes — Node status.
+
+kubectl get pods -A — Pods across all namespaces.
+
+Look for Pods stuck in Pending → usually means resource or networking issue.
+
+Check logs:
+
+bash
+Copy
+Edit
+kubectl logs <pod-name>
+kubectl describe <pod-name>
+journalctl -u kubelet
+✅ Also check:
+
+DNS: kubectl get svc -n kube-system
+
+Network plugin (CNI): kubectl get pods -n kube-system
+
+📌 44️⃣ Ingress — how will you connect with Load Balancer?
+➡️ “In production, the Ingress Controller (e.g., NGINX) is exposed using a Service of type LoadBalancer.
+The cloud provider (AWS, Azure, GCP) provisions an external Load Balancer, which gets a public IP.
+DNS for the app points to that IP.
+The Ingress Controller then uses Ingress rules to route traffic to backend Services.”
+
+✅ Example:
+
+yaml
+Copy
+Edit
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-nginx-controller
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+  selector:
+    app.kubernetes.io/name: ingress-nginx
+📌 45️⃣ What have you done using Kubernetes?
+➡️ “In my projects, I’ve set up clusters, written Helm charts, deployed microservices, configured Ingress for routing, implemented rolling updates and rollbacks, monitored clusters with Prometheus & Grafana, and automated CI/CD pipelines that deploy to K8s.
+I’ve also handled storage (PVCs), ConfigMaps, Secrets, and node scaling.”
+
+✅ Add what matches your experience.
+
+📌 46️⃣ How are you using Kubernetes in your project?
+➡️ “We use Kubernetes to deploy and scale containerized microservices.
+Each service runs as a Deployment behind a Service.
+We use Ingress to route external traffic.
+We store config as ConfigMaps and Secrets.
+We monitor with Prometheus and handle logs with Fluentd or EFK stack.
+CI/CD pushes images to our registry, then updates deployments.”
+
+📌 47️⃣ Will you be able to work with us on Kubernetes? Are you comfortable?
+➡️ “Absolutely — I’m very comfortable working with Kubernetes.
+I understand cluster setup, deployments, networking, storage, and troubleshooting, and I’m eager to solve real production problems and optimize how Kubernetes is used.”
+
+📌 48️⃣ Troubleshoot cluster (again)
+(Same as Q43 — so repeat flow)
+
+Control plane: kubectl get componentstatus
+
+Nodes: kubectl get nodes
+
+Pods: kubectl get pods -A
+
+Events: kubectl get events
+
+Logs: kubectl logs
+
+Network: check CNI pods.
+
+Storage: check PVs/PVCs.
+
+📌 49️⃣ Troubleshoot node
+➡️ “I’d check node health with kubectl describe node.
+Look at conditions: Ready? DiskPressure? MemoryPressure?
+SSH into the node, check journalctl -u kubelet and docker ps or containerd.
+Also check resources: CPU, RAM, disk usage.
+Sometimes CNI or kubelet misconfig causes NotReady.”
+
+📌 5️⃣0️⃣ Troubleshoot pods
+➡️ “I’d start with kubectl get pods. If it’s CrashLoopBackOff or Pending:
+
+kubectl describe pod — Events show probe failures, resource limits.
+
+kubectl logs <pod> — Look for errors.
+
+Check images — imagePull errors.
+
+Check storage if PV mount fails.
+
+Check readiness/liveness probes.
+
+📌 5️⃣1️⃣ Node keeps restarting — what will you do?
+➡️ “Check node logs:
+
+bash
+Copy
+Edit
+journalctl -xe
+journalctl -u kubelet
+Look for hardware issues, kernel panics, or low disk.
+Check cloud console for auto-scaling or spot instance terminations.
+If hardware or VM is faulty → cordon/drain → move workloads → replace node.”
+
+📌 5️⃣2️⃣ Where are you using Kubernetes?
+➡️ “In our microservices project — we run all backend and frontend services on Kubernetes.
+Also for CI pipelines, staging, and sometimes for data processing jobs.
+Ingress handles routing.
+We use K8s for easy scaling and high availability.”
+
+📌 5️⃣3️⃣ Explain a basic manifest file
+✅ Example Deployment manifest:
+
+yaml
+Copy
+Edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp-container
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+➡️ “This manifest creates a Deployment called myapp with 2 Pods running NGINX containers.
+It uses labels to select Pods.
+If a Pod crashes, the ReplicaSet automatically creates a new one to maintain desired replicas.”
+
+
+ 
+ 
+
+  54 * Any idea what is ingress
+
+Ingress is a Kubernetes API object that defines how to route external HTTP and HTTPS traffic to your internal cluster Services.
+It tells ingress controller to route traffic to the cluster services/Backend appln or service as ingress has routing rules
+
+
+Ingress + LoadBalancer = how you expose apps to the internet or outside cluster in production.
+Here’s the flow:
+
+1️⃣ Ingress Controller: A Pod running software like NGINX Ingress Controller or Traefik.
+2️⃣ LoadBalancer Service: A Kubernetes Service of type LoadBalancer that exposes the Ingress Controller to the public Internet.
+3️⃣ Ingress resource: The YAML config (kind: Ingress) that tells the controller how to route traffic to your backend Services.
+YAML file
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-ingress
+spec:
+  rules:
+  - host: myapp.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myapp-service
+            port:
+              number: 80
+
+
+
+
+
+
+   # Check the LoadBalancer external IP
+   kubectl get svc -n ingress-nginx
+
+   # Check Ingress rules
+   kubectl get ingress
+
+   # Inspect rules in detail
+   kubectl describe ingress example-ingress
+
+
+Why use Ingress?
+Without an Ingress, you typically expose a Service with:
+
+type: NodePort → each Service gets an open port on every Node.
+
+type: LoadBalancer → each Service gets its own cloud Load Balancer.
+
+✅ Ingress is better:
+
+You get one public entry point for many Services.
+
+You can do host-based or path-based routing.
+
+You can handle TLS termination in one place.
+
+
+ How to test
+1️⃣ Deploy your backend app (myapp-service).
+2️⃣ Deploy the Ingress Controller + LB Service.
+3️⃣ Create your Ingress.
+4️⃣ Get the external IP:
+                  kubectl get svc ingress-nginx-controller -n ingress-nginx
+5️⃣ Point your DNS (like myapp.example.com) to that IP.
+6️⃣ Test in browser → the LB routes to Ingress → Ingress routes to Service → Service to Pods.
+
+Ingress needs a LoadBalancer to connect the outside world to your cluster.
+Ingress Controller + Ingress resource do the routing
+
+  55 * Setup ingress,is there any requisite you need to do?
+
+1.Ingress Controller installed:  Without it, your Ingress does nothing 
+
+deploy NGINX Ingress Controller (common):
+
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml
+
+This installs:
+
+A Deployment (nginx-ingress-controller Pods)
+
+A Service of type LoadBalancer to expose it
+
+use below command to see the ingress controller is running
+kubectl get pods -n ingress-nginx
+
+
+2.Backend Service: Ingress controller must forward traffic somewhere 
+
+3.Ingress resource: Defines routing rules
+  A YAML file describing:
+
+  host (e.g., myapp.example.com)
+
+  paths (e.g., /api)
+
+  backend Service(name) + port
+
+
+ 4.DNS pointing to LB IP: Clients must reach the controller
+ Your domain (myapp.example.com) must point to the external IP of the Ingress Controller’s LoadBalancer Service.
+
+For dev, you can edit /etc/hosts instead
+
+
+5.Optional **TLS certs: For HTTPS                              
+6.Optional  Annotations / ConfigMap: 
+TLS certs — use cert-manager to auto-generate and renew Let’s Encrypt certificates.
+
+Annotations — for rewrites, timeouts, etc.
+
+RBAC — ensure your Ingress Controller has permission to read Ingress resources.
+
+
+
+ 8️⃣0️⃣ There are 2 containers in a Pod — how can you access them from a browser?
+➡️ “Inside a Pod, all containers share the same network namespace — same IP.
+Each container must listen on a different port if you want to expose both.
+
+Example:
+
+Container A → port 8080
+
+Container B → port 9090
+
+You then expose the Pod using a Service that maps both ports:
+
+yaml
+Copy
+Edit
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+  - port: 9090
+    targetPort: 9090
+➡️ Then you access:
+
+php-template
+Copy
+Edit
+http://<NodeIP>:<NodePort for 8080>
+http://<NodeIP>:<NodePort for 9090>
+Usually you’d put a reverse proxy like NGINX in front to unify them under one port.
+
+📌 8️⃣1️⃣ Can Secrets be given to a running container?
+➡️ “No — you cannot directly change Secrets in a running container.
+But if a Pod mounts a Secret as a volume, and you update the Secret, the new data will appear in the mounted path automatically.
+For env vars, Pods won’t see changes — you must restart the Pod.”
+
+📌 8️⃣2️⃣ One application and database Pod — how do they connect?
+➡️ “Usually, the DB runs in its own Pod, exposed with a Service.
+The app Pod connects via Service DNS name:
+
+Example:
+
+DB Service name: mysql
+
+App uses: mysql:3306 in its connection string.
+
+yaml
+Copy
+Edit
+env:
+- name: DB_HOST
+  value: mysql
+📌 8️⃣3️⃣ How are you managing your Secrets?
+➡️ “We store Secrets in Kubernetes using kind: Secret.
+They’re mounted as env vars or volumes.
+For sensitive production, we integrate external Secret Managers (AWS Secrets Manager, HashiCorp Vault) and use CSI drivers or external Secrets Operator.”
+
+📌 8️⃣4️⃣ How do you make a cluster highly available?
+➡️ “By having multiple master/control-plane nodes behind a load balancer.
+Also run etcd in odd-number quorum (3, 5).
+We use multiple worker nodes across zones for fault tolerance.
+Cloud Load Balancers handle API traffic failover.”
+
+📌 8️⃣5️⃣ Why keep master nodes in odd numbers?
+➡️ “etcd requires a quorum for consensus.
+Odd number ensures a clear majority for election.
+E.g., 3 nodes → 2 must be healthy.
+If you use even numbers, you risk split-brain situations.”
+
+📌 8️⃣6️⃣ How do you configure K8s Dashboard?
+➡️ “Apply the official YAML:
+
+bash
+Copy
+Edit
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+Expose it using a kubectl proxy or Ingress.
+Create a ServiceAccount with admin ClusterRole, get a token, log in.”
+
+📌 8️⃣7️⃣ Worker node goes down — how do you troubleshoot?
+➡️ *“Check if the Node is NotReady with kubectl get nodes.
+SSH in, check:
+
+bash
+Copy
+Edit
+journalctl -u kubelet
+Disk full? Networking down? Kubelet error?
+If unrecoverable — cordon/drain & replace the node.”*
+
+📌 8️⃣8️⃣ Example K8s Deployment file
+yaml
+Copy
+Edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp
+        image: nginx
+📌 8️⃣9️⃣ ConfigMap & Secrets
+✅ ConfigMap: non-sensitive config
+✅ Secret: sensitive data
+
+yaml
+Copy
+Edit
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-config
+data:
+  APP_MODE: "prod"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-secret
+type: Opaque
+data:
+  password: bXlwYXNz # echo -n "mypass" | base64
+📌 9️⃣0️⃣ Kubernetes Services & Types
+✅ Types:
+
+ClusterIP (default, internal only)
+
+NodePort (exposes port on each Node)
+
+LoadBalancer (cloud LB, public IP)
+
+Headless (clusterIP: None) for direct Pod discovery
+
+📌 9️⃣1️⃣ Ingress
+➡️ “Ingress routes HTTP/HTTPS traffic from outside to internal Services.
+Needs an Ingress Controller (like NGINX).
+Supports host/path-based routing, TLS termination, rewrites.”
+
+📌 9️⃣2️⃣ Ingress Controller
+➡️ “The actual pod that implements Ingress rules.
+Popular: NGINX, Traefik, AWS ALB Ingress.
+It watches Ingress resources and updates its config dynamically.”
+
+📌 9️⃣3️⃣ How do I connect RDS to K8s Pod?
+➡️ “Provision an RDS DB with a private subnet/VPC peered to your cluster.
+Expose DB endpoint as env var or Secret.
+App Pod uses that host:port to connect.”
+
+Example:
+
+yaml
+Copy
+Edit
+env:
+- name: DB_HOST
+  value: mydb.xxxxx.rds.amazonaws.com
+📌 9️⃣4️⃣ Services in Kubernetes
+➡️ “Service = stable virtual IP + DNS name for Pods.
+Handles load balancing & failover.
+Types: ClusterIP, NodePort, LoadBalancer, Headless.”
+
+📌 9️⃣5️⃣ Monolithic vs Microservices
+Monolithic	Microservices
+Single codebase	Many small services	
+Harder to scale parts	Scale services independently	
+Tight coupling	Loose coupling	
+One big deployment	Many Deployments	
+Example: old e-commerce app	Modern Netflix-style architecture	
+
+📌 9️⃣6️⃣ OOMKilled — state & fix
+➡️ “OOMKilled = Pod container exceeded memory limit.
+State: Terminated.
+Fix: Increase resources.limits.memory in YAML or optimize app.”
+
+yaml
+Copy
+Edit
+resources:
+  limits:
+    memory: "512Mi"
+📌 9️⃣7️⃣ Hard limit vs Soft limit
+➡️ “In K8s:
+
+Request = soft minimum guarantee (scheduler uses it to decide placement)
+
+Limit = hard max — container killed if exceeded.
+
+yaml
+Copy
+Edit
+resources:
+  requests:
+    memory: "256Mi"
+  limits:
+    memory: "512Mi"
+📌 9️⃣8️⃣ Pod running app — access it with public IP
+➡️ “Expose Pod with Service type: NodePort or type: LoadBalancer.
+
+yaml
+Copy
+Edit
+spec:
+  type: LoadBalancer
+Cloud provider provisions public IP → DNS → done.
+
+📌 9️⃣9️⃣ DaemonSet — use cases
+➡️ *“DaemonSet ensures 1 Pod per Node.
+Use cases:
+
+Log collectors (Fluentd)
+
+Monitoring agents (Node Exporter)
+
+CNI plugins
+
+Storage drivers”*
+
+📌 1️⃣0️⃣0️⃣ ConfigMap & Secrets (again)
+✅ ConfigMap: plain config, app settings.
+✅ Secret: base64-encoded sensitive data — API keys, passwords.
+
+Both can be:
+
+Mounted as env vars
+
+Mounted as files
+
+Referenced in Pod spec
+
+
+
+
+
+
+
+
+  101* have you deployed jenkins to k8s.
+  102* where you stored in kube config file. where you will be storing it.how its linked to aws environment
+  103* explain your k8s cluster and how many master and Node you have.
+  104* Monolithic vs Micro service
+  105* How you were deploying 
+  106* If you were not using helm How you'll deploy the app to k8s
+  107* Name control plane of k8s ?
+  108* Networking solutions on k8s ?
+  109* Which network solutions are do you use in deployments ?
+  110* Which network solutions are do you use in deployments ?
+  111* In my cluster schedulers goes down completely ? what will happen to applications ?
+  112* Can I create my scheduler ?
+  113* Can I create my own controller manager ?
+  114* What is static pod ?
+  115* You create a deployment and app will deploy to a pod, both pods are up and running but traffic is directed to only one pod. Why and how do you troubleshoot it ?
+  116* explain the components of K8S 
+  117* different kinds of technical deployments
+  118* i have web application nginx , i have a sql server ,would like to deploy elk. which of the component will use stateful, stateless.
+  119* k8s master node
+  120* k8s challenges you have faced & jenkins challenges in build failures
+  121* explain some kubernetees  commands
+  122* k8s perticular pod is not restarting. how you do troubleshoot
+  123* load balancer how you creating in k8s which port service you are using.
+  124* Kubernetes components in master n worker nodes
+  125* What's kubeproxy
+  126* If master node is down What will happen (if single master)
+  127* What's labels and selectors
+  128* Default deployment strategy
+  129* How we can achieve blue-green deployment strategies
+  130* What kind of monitoring tools you are using
+  131* what u have done in k8s?
+  132* what steps u follow in creating pod? & which command?
+  133* pod status?
+  134* what is imagefullbackup? what all are the reasons?
+  135* how to have image when internet is not available?
+  136* ans: we can keep it in scm full along with source code
+  137* Kubernetes- config and secretes
+  138* AWS security manager has credentials , how u use it in kubernetes as secrets 
+  139* Branching strategy
+  140* Scenario on release branching strategy to handle two release in dec and jan on after another 
+  141* Which set up - EKS or selfmanaged
+  142* Many questions on self managed cluster
+  143*  troubleshooting node 
+  144*  evicting pod from a node
+  145*  node pool - nothing but node pod affinity antiaffinity topic .. 
+  146* Assume only one master node - what if it crashes, vl application run
+  147* How do u solve this issue if master crashes
+  148* What if a node crashes , how do u debug or get logs and troubleshoot it 
+  149* Where the logs of application are saved .
+  150* Command to get the logs . 
+  151* Many other scenario based questions on trouble shooting kubernetes cluster issues
+  152* Where have u set up kubernetes,  self managed or EKs
+  153* Kubernetes taint nodes
+  154* How to control taint nodes - ans is node controller
+  155* Load balancer- configurations done for load balancer in config file 
+  156* Kubernetes probes - liveliness and readiness
+  157* The application deployment is successful but still pod is not up what could be the reason
+  158*  How do u manage ur k8s env in prod?
+  159* In multi cluster arch of k8s, u have 2 clusters n each cluster has a diff VPC. if u create a EKS cluster, it will create 2 VPC in same region (Mumbai)
+  160* then how can pod in cluster 1 can communicate with another pod in cluster 2?
+  161* Difference between load balancer and ingree. Y u need ingress
+  162* How are you exposing your service
+  163*  What is LDAP
+  164* deployment of apache with 3 replicas
+  165* what is kubeconfig 
+  166* Explain the plugins you used
+  167* How you secure your clusters
+  168* What is the purpose of ingress and how you connect it
+  169*  manifest file for deployment with autoscaling in it from 3-7 pods
+  170*  manifest file for secrets and volume attach
+  171*  How u connect ingress
+  172*  which controller u r using
+  173* how many master and worker node you have
+  174* how many clusters
+  175* How Kubernetes namespace works
+  176* explain your k8s cluster and how many master and Node you have.
+  177* how many master m/c and slave m/c do u have, what are type of instance you have have used 
+  178* kubernetics monitoring, clusterup  steps, instances used for k8s?
+  179* why not eks?
+  180* how you are deploying application in kubernetics
+  181* how to create a pod on perticular worker node
+  182* k8s services 
+  183* what is version of K8s and helm you ar using 
+  184* how 2 containers with 2 diffrece application can share the information
+
+
+ 1️⃣0️⃣1️⃣ Have you deployed Jenkins on Kubernetes?
+➡️ “Yes — we’ve deployed Jenkins as a Deployment with a PersistentVolume for /var/jenkins_home.
+We expose it using a Service with NodePort or Ingress for web UI access.
+We also run agents dynamically using Kubernetes Plugin.”
+
+✅ Example:
+
+yaml
+Copy
+Edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+      - name: jenkins
+        image: jenkins/jenkins:lts
+        volumeMounts:
+        - name: jenkins-home
+          mountPath: /var/jenkins_home
+      volumes:
+      - name: jenkins-home
+        persistentVolumeClaim:
+          claimName: jenkins-pvc
+📌 1️⃣0️⃣2️⃣ Where do you store your kubeconfig file? How is it linked to AWS?
+➡️ “By default, ~/.kube/config holds cluster contexts and credentials.
+For AWS EKS, aws eks update-kubeconfig pulls cluster details and IAM auth info and writes it there.
+CI/CD systems might store it securely in Secrets Managers or as a Kubernetes Secret mounted into runner Pods.”
+
+📌 1️⃣0️⃣3️⃣ Explain your K8s cluster — how many Masters & Nodes?
+➡️ “Our cluster has 3 control plane nodes (for HA) behind an ELB.
+We have around 5–10 worker nodes — auto-scaled based on workloads, across multiple AZs for resilience.”
+
+📌 1️⃣0️⃣4️⃣ Monolithic vs Microservices
+➡️ Same as before:
+
+Aspect	Monolithic	Microservices
+Architecture	Single big app	Many small services
+Scaling	Scale entire app	Scale services independently
+Tech stack	Often one tech	Polyglot possible
+Deploy	One deploy pipeline	Many pipelines
+Example	Legacy ERP	Netflix, Uber
+
+📌 1️⃣0️⃣5️⃣ How are you deploying?
+➡️ “We deploy with kubectl, GitOps pipelines, Helm, or Kustomize.
+Our CI/CD (like Jenkins or GitHub Actions) builds images, pushes them to ECR, then applies YAML or Helm charts to the cluster.”
+
+📌 1️⃣0️⃣6️⃣ If not using Helm — how do you deploy?
+➡️ “I’d use plain kubectl apply -f with raw YAML or Kustomize for patching & overlays.
+Sometimes we template YAML using envsubst or CI pipeline variables.”
+
+📌 1️⃣0️⃣7️⃣ Name control plane components
+➡️ “Control Plane = kube-apiserver, etcd, kube-scheduler, kube-controller-manager, and cloud-controller-manager (if cloud).”
+
+📌 1️⃣0️⃣8️⃣ Networking solutions in K8s?
+➡️ “CNI plugins provide Pod networking: Calico, Flannel, Weave, Cilium, AWS VPC CNI.
+For Ingress: NGINX, Traefik, ALB Ingress Controller.”
+
+📌 1️⃣0️⃣9️⃣ & 1️⃣1️⃣0️⃣ Which network solutions do you use?
+➡️ “Mostly AWS VPC CNI for Pod IPs in our EKS clusters, with Calico for NetworkPolicies.
+For Ingress, we use NGINX Ingress Controller or ALB Ingress Controller.”
+
+📌 1️⃣1️⃣1️⃣ If your scheduler goes down — what happens to apps?
+➡️ “Running Pods stay unaffected — the scheduler is only for placing new Pods.
+If it’s down, new Pods can’t be scheduled but existing ones run fine.”
+
+📌 1️⃣1️⃣2️⃣ Can I create my own scheduler?
+➡️ “Yes — you can write a custom scheduler using the Kubernetes API and register it.
+Pods can set schedulerName in their spec to use your scheduler instead of default-scheduler.”
+
+📌 1️⃣1️⃣3️⃣ Can I create my own controller manager?
+➡️ “Yes — you can write custom controllers/operators using client libraries like client-go or frameworks like Operator SDK.
+They watch resources and reconcile state.”
+
+📌 1️⃣1️⃣4️⃣ What is a static Pod?
+➡️ “A static Pod is defined directly on a Node’s filesystem (/etc/kubernetes/manifests).
+The kubelet watches this folder and runs the Pod.
+Used for core system Pods (etcd, kube-apiserver) before the cluster API is fully up.”
+
+📌 1️⃣1️⃣5️⃣ Traffic only goes to one Pod — why?
+➡️ “Possible reasons:
+
+Readiness probe failing → other Pods marked unready.
+
+Service selector mismatch → only one Pod matching.
+
+Session stickiness → client always hits same backend.
+
+Check with:
+
+bash
+Copy
+Edit
+kubectl get endpoints <service>
+kubectl describe pod <pod>
+📌 1️⃣1️⃣6️⃣ Explain K8s components
+Component	Purpose
+kube-apiserver	API entry point
+etcd	Cluster store
+kube-scheduler	Places Pods
+kube-controller-manager	Runs controllers
+kube-proxy	Maintains network rules
+kubelet	Runs on nodes, talks to container runtime
+
+📌 1️⃣1️⃣7️⃣ Kinds of deployments
+➡️ Rolling Update (default), Recreate, Blue-Green, Canary.
+
+📌 1️⃣1️⃣8️⃣ NGINX + SQL Server + ELK — which Stateful, which Stateless?
+Component	Type
+NGINX web server	Stateless
+SQL Server DB	Stateful (needs PVC)
+ELK (Elasticsearch)	Stateful (storage needed for index data)
+
+📌 1️⃣1️⃣9️⃣ Master Node
+➡️ Runs control plane components: API server, etcd, scheduler, controller-manager.
+No user workloads usually run here.
+
+📌 1️⃣2️⃣0️⃣ Challenges — K8s & Jenkins
+➡️ “K8s: troubleshooting DNS issues, resource limits (OOM), misconfigured Ingress, node failures, upgrades.
+
+Jenkins: plugin conflicts, build queue deadlocks, pipeline timeouts, environment drifts, credential mismanagement
+
+
+
+
+
+
+1️⃣2️⃣0️⃣ K8s & Jenkins challenges
+K8s:
+
+Debugging networking (Pods can’t talk).
+
+OOMKilled when memory is too low.
+
+Pod stuck in CrashLoopBackOff.
+
+DNS failures or misconfigured Ingress.
+
+Jenkins:
+
+Slow builds.
+
+Plugin conflicts.
+
+Node agents disconnecting.
+
+Wrong credentials / secrets leaking in pipelines.
+
+✅ 1️⃣2️⃣1️⃣ Some useful kubectl commands
+Get pods: kubectl get pods
+
+Describe pod: kubectl describe pod <name>
+
+Logs: kubectl logs <pod>
+
+Deploy: kubectl apply -f deployment.yaml
+
+Delete: kubectl delete -f file.yaml
+
+Exec inside pod: kubectl exec -it <pod> -- bash
+
+✅ 1️⃣2️⃣2️⃣ Pod not restarting — troubleshooting
+Check Pod events: kubectl describe pod <pod>
+
+Look for CrashLoopBackOff → read logs: kubectl logs <pod>
+
+Check resource limits → maybe it’s OOMKilled.
+
+Check liveness/readiness probes.
+
+If needed, delete Pod → Deployment/ReplicaSet recreates it.
+
+✅ 1️⃣2️⃣3️⃣ LoadBalancer in K8s — how?
+Example:
+
+yaml
+Copy
+Edit
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8080
+➡️ Cloud provider provisions public IP & forwards traffic to Service → Pods.
+
+✅ 1️⃣2️⃣4️⃣ K8s Master & Worker Node components
+Master:
+
+kube-apiserver
+
+etcd
+
+kube-controller-manager
+
+kube-scheduler
+
+Worker:
+
+kubelet
+
+kube-proxy
+
+container runtime (Docker/containerd)
+
+✅ 1️⃣2️⃣5️⃣ kube-proxy
+➡️ Handles networking on Nodes — manages iptables to forward traffic for Services.
+
+✅ 1️⃣2️⃣6️⃣ Master down (single master)?
+➡️ Cluster API is down — can’t create/update Pods — but running Pods keep working.
+
+✅ 1️⃣2️⃣7️⃣ Labels & Selectors
+➡️ Labels = key:value pairs on resources.
+Selectors = filter resources by labels.
+
+Example:
+
+yaml
+Copy
+Edit
+labels:
+  app: frontend
+
+selector:
+  matchLabels:
+    app: frontend
+✅ 1️⃣2️⃣8️⃣ Default deployment strategy
+➡️ RollingUpdate — Kubernetes replaces old Pods gradually with new ones.
+
+✅ 1️⃣2️⃣9️⃣ Blue-Green strategy
+➡️ Run 2 Deployments:
+
+v1 → blue
+
+v2 → green
+
+Switch Service or Ingress to point to green when ready. Old version stays as fallback.
+
+✅ 1️⃣3️⃣0️⃣ Monitoring tools
+➡️ Prometheus, Grafana, ELK stack, CloudWatch, New Relic.
+
+✅ 1️⃣3️⃣1️⃣ What have you done in K8s?
+➡️ “Deployed microservices, created YAMLs, set up Ingress, managed ConfigMaps/Secrets, scaled clusters, handled rollouts, wrote Helm charts, did upgrades.”
+
+✅ 1️⃣3️⃣2️⃣ Steps to create Pod
+1️⃣ Write YAML with apiVersion, kind: Pod.
+2️⃣ Define spec.containers.
+3️⃣ Apply: kubectl apply -f pod.yaml.
+
+✅ 1️⃣3️⃣3️⃣ Pod status
+➡️ Pending → Running → Succeeded or Failed.
+CrashLoopBackOff if keeps failing.
+
+✅ 1️⃣3️⃣4️⃣ Image full backup
+➡️ Means backup of your container image to keep it offline. Reasons: air-gapped clusters, DR, or build caching.
+
+✅ 1️⃣3️⃣5️⃣ How to have image with no internet
+➡️ Push image to private registry or save .tar:
+
+bash
+Copy
+Edit
+docker save -o myimage.tar myimage:tag
+docker load -i myimage.tar
+✅ 1️⃣3️⃣6️⃣ SCM for image
+➡️ “Store Dockerfile + source in SCM (Git). Build image from code anytime, even offline.”
+
+✅ 1️⃣3️⃣7️⃣ K8s ConfigMap & Secrets
+➡️ ConfigMap → non-sensitive. Secret → sensitive (base64).
+Mounted as env vars or volumes.
+
+✅ 1️⃣3️⃣8️⃣ AWS Secrets Manager → K8s
+➡️ Use CSI driver or External Secrets Operator.
+Fetch secret → create kind: Secret → mount in Pod.
+
+✅ 1️⃣3️⃣9️⃣ Branching strategy
+➡️ Main branch → stable.
+Feature branches → PRs.
+Develop → integration.
+Release branches → versioned, e.g., release/1.0.
+
+✅ 1️⃣4️⃣0️⃣ 2 Releases — Dec & Jan
+➡️ Use release/Dec & release/Jan.
+Hotfix Dec → merge back to main → cherry-pick to Jan if needed.
+
+✅ 1️⃣4️⃣1️⃣ EKS or self-managed?
+➡️ Prefer EKS for easy control plane, auto upgrades.
+Self-managed for on-prem or custom networking.
+
+✅ 1️⃣4️⃣2️⃣ Self-managed cluster
+➡️ Install K8s with kubeadm.
+Set up masters, worker nodes, networking (CNI), storage, Ingress.
+
+✅ 1️⃣4️⃣3️⃣ Troubleshoot Node
+➡️ kubectl describe node.
+Check kubelet: journalctl -u kubelet.
+Check disk, CPU, networking.
+
+✅ 1️⃣4️⃣4️⃣ Evict Pod
+➡️ Drain:
+
+bash
+Copy
+Edit
+kubectl drain <node> --ignore-daemonsets
+✅ 1️⃣4️⃣5️⃣ Node pool, affinity, anti-affinity
+➡️ Node pool = group of similar worker nodes.
+Use nodeAffinity or podAffinity to control placement.
+
+✅ 1️⃣4️⃣6️⃣ Single master crashes — apps?
+➡️ Existing Pods run fine. New scheduling won’t work.
+
+✅ 1️⃣4️⃣7️⃣ Master crashes — solution
+➡️ Spin up new master with same etcd data.
+Always have odd master count for HA.
+
+✅ 1️⃣4️⃣8️⃣ Node crashes — debug
+➡️ *Check cloud logs, node logs (journalctl).
+Check events:
+
+bash
+Copy
+Edit
+kubectl get events --sort-by=.metadata.creationTimestamp
+Replace node if unrecoverable.*
+
+✅ 1️⃣4️⃣9️⃣ Where are app logs saved?
+➡️ Inside container’s stdout/stderr. Nodes keep container logs under /var/log/containers/.
+Or ship to ELK/CloudWatch.
+
+✅ 1️⃣5️⃣0️⃣ Command to get logs
+bash
+Copy
+Edit
+kubectl logs <pod>
+kubectl logs <pod> -c <container>
+✅ 1️⃣5️⃣1️⃣ Troubleshooting scenarios
+➡️ Pods stuck → check describe, logs.
+Nodes NotReady → check kubelet, networking.
+CrashLoop → check resources, probes.
+
+✅ 1️⃣5️⃣2️⃣ Where have you setup K8s?
+➡️ “Both: EKS for cloud, kubeadm for on-prem dev clusters.”
+
+✅ 1️⃣5️⃣3️⃣ Node taints
+➡️ Mark Node as special — Pods need tolerations to run there.
+
+bash
+Copy
+Edit
+kubectl taint nodes <node> key=value:NoSchedule
+✅ 1️⃣5️⃣4️⃣ Control taint — Node Controller
+➡️ Controller ensures only tolerant Pods run there.
+
+✅ 1️⃣5️⃣5️⃣ Load Balancer configs
+➡️ Service type: LoadBalancer.
+Annotations for LB type, health checks.
+Ingress Controller uses LB in front.
+
+
+
+
+
+
+
+
+1️⃣5️⃣6️⃣ Probes: Liveness vs Readiness
+🔹 Liveness Probe:
+👉 Checks if your app is alive. If it fails, kubelet kills & restarts the container.
+Use case: App stuck in infinite loop — liveness probe detects & restarts.
+
+🔹 Readiness Probe:
+👉 Checks if your app is ready to serve traffic. If it fails, the Pod stays running but the Endpoint is removed from the Service — so no traffic goes to it.
+
+✅ Example:
+
+yaml
+Copy
+Edit
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+📌 1️⃣5️⃣7️⃣ Deployment is successful but Pod not up — why?
+👉 Common reasons:
+
+ImagePullBackOff — wrong image or private repo without credentials.
+
+CrashLoopBackOff — app crashes after start → check logs.
+
+Readiness probe failing → Pod not “Ready”.
+
+Resource limits too tight → OOMKilled.
+
+✅ Always: kubectl describe pod and kubectl logs <pod>.
+
+📌 1️⃣5️⃣8️⃣ How do you manage K8s in prod?
+👉 "We manage using GitOps with ArgoCD or Flux, Helm charts for packaging, strict RBAC, namespaces for multi-tenancy, Secrets with AWS Secrets Manager or Vault, monitoring with Prometheus/Grafana, logging with EFK or CloudWatch."
+
+📌 1️⃣5️⃣9️⃣ Multi-cluster: 2 EKS clusters → 2 VPCs
+👉 EKS by default creates 1 VPC per cluster (e.g., Mumbai). So if you have 2 clusters → 2 VPCs.
+
+📌 1️⃣6️⃣0️⃣ Pod in Cluster 1 talks to Cluster 2 — how?
+✅ Use VPC peering or Transit Gateway → allows private IP connectivity between VPCs.
+✅ Use Service Mesh like Istio or Linkerd for cross-cluster routing.
+✅ Sometimes expose an internal Load Balancer in one cluster and access it from the other.
+
+📌 1️⃣6️⃣1️⃣ LoadBalancer vs Ingress
+LoadBalancer	Ingress
+Provisions a cloud LB (AWS ELB)	Just a K8s resource	
+Forwards all traffic to one Service	Routes HTTP(S) to multiple Services	
+No advanced routing	Supports path/host rules, TLS termination	
+
+✅ Why Ingress? → Cost-efficient, single IP for many apps, flexible routing.
+
+📌 1️⃣6️⃣2️⃣ How are you exposing your Services?
+➡️ “ClusterIP for internal, NodePort for node-level access, LoadBalancer for cloud LB, Ingress for HTTP routing with domain names.”
+
+📌 1️⃣6️⃣3️⃣ What is LDAP?
+➡️ “Lightweight Directory Access Protocol — central directory for storing users/groups. Many companies use it for authentication. Can integrate with K8s RBAC via OIDC plugins.”
+
+📌 1️⃣6️⃣4️⃣ Apache Deployment with 3 replicas
+yaml
+Copy
+Edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apache
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: apache
+  template:
+    metadata:
+      labels:
+        app: apache
+    spec:
+      containers:
+      - name: apache
+        image: httpd:latest
+📌 1️⃣6️⃣5️⃣ What is kubeconfig?
+➡️ Holds cluster info, user credentials, contexts. Stored at ~/.kube/config. Used by kubectl to talk to API server.
+
+📌 1️⃣6️⃣6️⃣ Plugins you use
+✅ K8s: CNI plugins (Calico, Cilium), CSI drivers for storage, External Secrets Operator.
+✅ Jenkins: Git, Docker, Kubernetes Plugin for dynamic agents.
+
+📌 1️⃣6️⃣7️⃣ How do you secure clusters?
+✅ RBAC, network policies, encrypt Secrets, IAM roles for Service Accounts, audit logging, TLS everywhere, scanning images (Trivy, Aqua), pod security policies or OPA Gatekeeper.
+
+📌 1️⃣6️⃣8️⃣ Purpose of Ingress & how you connect
+➡️ Routes external HTTP(S) traffic to Services inside cluster.
+Uses Ingress Controller like NGINX or ALB.
+Connect DNS → LB → Ingress Controller → Service → Pods.
+
+📌 1️⃣6️⃣9️⃣ Deployment + Autoscaling Manifest
+yaml
+Copy
+Edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp
+        image: nginx
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: myapp
+  minReplicas: 3
+  maxReplicas: 7
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+📌 1️⃣7️⃣0️⃣ Secrets + Volume Attach
+yaml
+Copy
+Edit
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-secret
+type: Opaque
+data:
+  password: bXlwYXNz # echo -n "mypass" | base64
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secret-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: secret-volume
+      mountPath: "/etc/secret"
+  volumes:
+  - name: secret-volume
+    secret:
+      secretName: my-secret
+📌 1️⃣7️⃣1️⃣ How do you connect Ingress?
+➡️ Deploy Ingress Controller (e.g., NGINX).
+Create Ingress resource with host/path rules.
+Point DNS to the Load Balancer behind the Ingress Controller.
+
+📌 1️⃣7️⃣2️⃣ Which controller do you use?
+➡️ Mostly NGINX Ingress Controller, AWS ALB Ingress Controller, External Secrets Operator, HorizontalPodAutoscaler, custom operators.
+
+📌 1️⃣7️⃣3️⃣, 1️⃣7️⃣4️⃣, 1️⃣7️⃣6️⃣, 1️⃣7️⃣7️⃣ How many Masters/Workers/Clusters/Instances?
+➡️ “Typically 3 Masters for HA, 5–10 Workers, spread across 2–3 AZs, EC2 m5.large for Masters, c5.large for Workers.
+In Prod we might have multiple clusters for isolation (Dev, Staging, Prod).”
+
+📌 1️⃣7️⃣5️⃣ Namespaces — how do they work?
+➡️ Logical separation inside a cluster.
+Separate teams, apps, or environments (dev, staging, prod) share the same cluster safely.
+
+📌 1️⃣7️⃣8️⃣ Monitoring, cluster up, instances
+➡️ Prometheus + Grafana, EFK for logs, CloudWatch if AWS.
+Set up with kubeadm for on-prem.
+Instances: t3.medium for small dev, m5.large/c5.large for prod.
+
+📌 1️⃣7️⃣9️⃣ Why not EKS?
+➡️ If tight budget, need full control, custom networking, air-gapped — then self-managed.
+Otherwise, EKS is easier for managed control plane.
+
+📌 1️⃣8️⃣0️⃣ How are you deploying apps?
+➡️ Helm charts, kubectl apply, Kustomize, GitOps pipelines.
+
+📌 1️⃣8️⃣1️⃣ Create Pod on specific Worker Node
+✅ Use nodeSelector:
+
+yaml
+Copy
+Edit
+spec:
+  nodeSelector:
+    disktype: ssd
+📌 1️⃣8️⃣2️⃣ K8s Services
+➡️ ClusterIP, NodePort, LoadBalancer, Headless.
+Stable virtual IP for Pods, does LB & Service discovery.
+
+📌 1️⃣8️⃣3️⃣ K8s & Helm versions
+➡️ Example: K8s v1.28, Helm v3.13.
+
+📌 1️⃣8️⃣4️⃣ How do 2 containers share info in a Pod?
+➡️ They share:
+1️⃣ Same network namespace → localhost works.
+2️⃣ Same filesystem → shared volume mount.
+
+✅ Example:
+
+yaml
+Copy
+Edit
+volumes:
+- name: shared-data
+  emptyDir: {}
+containers:
+- name: app1
+  ...
+  volumeMounts:
+  - mountPath: /data
+    name: shared-data
+- name: app2
+  ...
+  volumeMounts:
+  - mountPath: /data
+    name: shared-data
+
+
+
+
+
+14. How Two Containers with Different Applications Can Share Information
+
+In Kubernetes, two containers inside the same Pod can share information in two main ways:
+
+🔗 1. Shared Volume (Preferred Method)
+
+Both containers mount the same volume, so they can read/write to the same files.
+
+spec:
+  containers:
+  - name: app1
+    image: app1-image
+    volumeMounts:
+    - name: shared-data
+      mountPath: /shared
+  - name: app2
+    image: app2-image
+    volumeMounts:
+    - name: shared-data
+      mountPath: /shared
+  volumes:
+  - name: shared-data
+    emptyDir: {}
+
+emptyDir means a temporary directory created when the pod starts.
+
+Both containers see /shared as a common space.
+
+🌐 2. localhost Networking (Inter-Container Communication)
+
+Containers in the same Pod share the same network namespace.
+
+One container can connect to another using localhost:<port>.
+
+Example:
+
+App1 exposes an HTTP API on port 8080.
+
+App2 sends requests to http://localhost:8080
+
+This is useful when one app serves data and another processes or logs it.
+
+Let me know if you want an example with separate pods communicating using a service.
+
+
+15. Kubernetes Secrets vs ConfigMaps
+
+Feature
+
+ConfigMap
+
+Secret
+
+Purpose
+
+Store non-sensitive config
+
+Store sensitive data (e.g., passwords, API keys)
+
+Encoding
+
+Stored as plain text (base64 not required)
+
+Base64-encoded data (not encrypted)
+
+Use Case Examples
+
+Environment variables, CLI args
+
+Credentials, TLS certs, tokens
+
+Mounted As
+
+Volumes or env vars
+
+Volumes or env vars
+
+Security Concern
+
+Readable by anyone with access
+
+Kubernetes RBAC can restrict access
+
+🔐 Example - ConfigMap
+
+kubectl create configmap app-config --from-literal=env=prod
+
+🔐 Example - Secret
+
+kubectl create secret generic db-creds --from-literal=username=admin --from-literal=password=secret123
+
+Mount into Pod
+
+env:
+- name: DB_USER
+  valueFrom:
+    secretKeyRef:
+      name: db-creds
+      key: username
+
+ConfigMaps are better for app configs. Secrets are a must for secure data. You can also use external secret managers (like AWS Secrets Manager or HashiCorp Vault) with Kubernetes via integrations.
+
+
+
+
+In Kubernetes, Deployment Strategies define how the Deployment controller transitions from the current ReplicaSet (version N) to a new ReplicaSet (version N+1).
+They control how Pods are created, terminated, and scaled during an update, to balance:
+
+Availability
+
+Risk
+
+Rollback ability
+
+Resource constraints
+
+
+📌 42️⃣ Kubernetes: setting up a high availability (HA) cluster
+Answer:
+➡️ “To set up an HA Kubernetes cluster, we deploy multiple control plane nodes (masters) and use a load balancer in front of the API servers.
+The etcd database is also run in a clustered mode with an odd number of members (like 3 or 5) for quorum and failover.
+We also configure kubelets and kube-proxy on worker nodes to talk to multiple API servers, so if one goes down, the cluster stays functional.”
+
+✅ Key parts for HA:
+
+Multiple control plane nodes
+
+External Load Balancer for kube-apiserver
+
+etcd cluster
+
+Correct kubeadm flags, for example:
+
+bash
+Copy code
+kubeadm init --control-plane-endpoint "LB-DNS:6443"
+📌 43️⃣ Troubleshoot cluster
+Answer:
+➡️ “When troubleshooting a cluster issue, I usually start with kubectl get componentstatus to check control plane health — API server, scheduler, etcd.
+I also check kubelet and kube-proxy on nodes.
+Typical checks:
+
+kubectl get nodes — Node status.
+
+kubectl get pods -A — Pods across all namespaces.
+
+Look for Pods stuck in Pending → usually means resource or networking issue.
+
+Check logs:
+
+bash
+Copy code
+kubectl logs <pod-name>
+kubectl describe <pod-name>
+journalctl -u kubelet
+✅ Also check:
+
+DNS: kubectl get svc -n kube-system
+
+Network plugin (CNI): kubectl get pods -n kube-system
+
+📌 44️⃣ Ingress — how will you connect with Load Balancer?
+➡️ “In production, the Ingress Controller (e.g., NGINX) is exposed using a Service of type LoadBalancer.
+The cloud provider (AWS, Azure, GCP) provisions an external Load Balancer, which gets a public IP.
+DNS for the app points to that IP.
+The Ingress Controller then uses Ingress rules to route traffic to backend Services.”
+
+✅ Example:
+
+yaml
+Copy code
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-nginx-controller
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+  selector:
+    app.kubernetes.io/name: ingress-nginx
+📌 45️⃣ What have you done using Kubernetes?
+➡️ “In my projects, I’ve set up clusters, written Helm charts, deployed microservices, configured Ingress for routing, implemented rolling updates and rollbacks, monitored clusters with Prometheus & Grafana, and automated CI/CD pipelines that deploy to K8s.
+I’ve also handled storage (PVCs), ConfigMaps, Secrets, and node scaling.”
+
+✅ Add what matches your experience.
+
+📌 46️⃣ How are you using Kubernetes in your project?
+➡️ “We use Kubernetes to deploy and scale containerized microservices.
+Each service runs as a Deployment behind a Service.
+We use Ingress to route external traffic.
+We store config as ConfigMaps and Secrets.
+We monitor with Prometheus and handle logs with Fluentd or EFK stack.
+CI/CD pushes images to our registry, then updates deployments.”
+
+📌 47️⃣ Will you be able to work with us on Kubernetes? Are you comfortable?
+➡️ “Absolutely — I’m very comfortable working with Kubernetes.
+I understand cluster setup, deployments, networking, storage, and troubleshooting, and I’m eager to solve real production problems and optimize how Kubernetes is used.”
+
+📌 48️⃣ Troubleshoot cluster (again)
+(Same as Q43 — so repeat flow)
+
+Control plane: kubectl get componentstatus
+
+Nodes: kubectl get nodes
+
+Pods: kubectl get pods -A
+
+Events: kubectl get events
+
+Logs: kubectl logs
+
+Network: check CNI pods.
+
+Storage: check PVs/PVCs.
+
+📌 49️⃣ Troubleshoot node
+➡️ “I’d check node health with kubectl describe node.
+Look at conditions: Ready? DiskPressure? MemoryPressure?
+SSH into the node, check journalctl -u kubelet and docker ps or containerd.
+Also check resources: CPU, RAM, disk usage.
+Sometimes CNI or kubelet misconfig causes NotReady.”
+
+📌 5️⃣0️⃣ Troubleshoot pods
+➡️ “I’d start with kubectl get pods. If it’s CrashLoopBackOff or Pending:
+
+kubectl describe pod — Events show probe failures, resource limits.
+
+kubectl logs <pod> — Look for errors.
+
+Check images — imagePull errors.
+
+Check storage if PV mount fails.
+
+Check readiness/liveness probes.
+
+📌 5️⃣1️⃣ Node keeps restarting — what will you do?
+➡️ “Check node logs:
+
+bash
+Copy code
+journalctl -xe
+journalctl -u kubelet
+Look for hardware issues, kernel panics, or low disk.
+Check cloud console for auto-scaling or spot instance terminations.
+If hardware or VM is faulty → cordon/drain → move workloads → replace node.”
+
+📌 5️⃣2️⃣ Where are you using Kubernetes?
+➡️ “In our microservices project — we run all backend and frontend services on Kubernetes.
+Also for CI pipelines, staging, and sometimes for data processing jobs.
+Ingress handles routing.
+We use K8s for easy scaling and high availability.”
+
+📌 5️⃣3️⃣ Explain a basic manifest file
+✅ Example Deployment manifest:
+
+yaml
+Copy code
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp-container
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+➡️ “This manifest creates a Deployment called myapp with 2 Pods running NGINX containers.
+It uses labels to select Pods.
+If a Pod crashes, the ReplicaSet automatically creates a new one to maintain desired replicas.”
+
+
+
+
