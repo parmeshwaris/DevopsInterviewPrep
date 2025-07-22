@@ -1,0 +1,77 @@
+K8S Ultimate Interview Master Guide
+1. Kubernetes Probes: Liveness and Readiness
+Liveness Probe: checks if the app is alive. If failing, kubelet restarts it.
+Readiness Probe: checks if app is ready to serve traffic. If failing, Pod is removed from Service endpoints.
+
+Example:
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+2. Deployment with Autoscaling
+Deployment manages ReplicaSets and Pods. Autoscaling is done by HorizontalPodAutoscaler.
+
+Example manifest:
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp
+        image: nginx
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: myapp
+  minReplicas: 3
+  maxReplicas: 7
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+3. Basic kubectl Commands
+kubectl get pods
+kubectl describe pod <pod-name>
+kubectl logs <pod-name>
+kubectl exec -it <pod-name> -- bash
+kubectl apply -f <file>.yaml
+kubectl delete -f <file>.yaml
+4. Troubleshooting Node Issues
+Check node status:
+kubectl get nodes
+
+Describe node:
+kubectl describe node <node-name>
+
+Check conditions like MemoryPressure, DiskPressure, NetworkUnavailable.
+Look at logs with journalctl or cloud provider console.
